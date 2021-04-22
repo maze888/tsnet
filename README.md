@@ -1,2 +1,3 @@
 # tsnet
-tiny server network framework
+tsnet is simple server network library
+tsnet is single thread / event driven structure.
