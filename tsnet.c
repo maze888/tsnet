@@ -203,7 +203,7 @@ int tsnet_loop(TSNET *tsnet)
 					if ( tsnet->cb_vec[TSNET_EVENT_READ] ) tsnet->cb_vec[TSNET_EVENT_READ](events[i].data.fd, read_buffer, nread);
 				}
 			}
-			else if ( events[i].events & EPOLLHUP ) { // recv return zero (same case)
+			else if ( events[i].events & EPOLLHUP /* recv return zero(same case) */ || events[i].events & EPOLLERR ) {
 				if ( close_client(tsnet, events[i].data.fd) < 0 ) goto out;
 			}
 		}
