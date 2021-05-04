@@ -7,6 +7,8 @@ tsnet is simple server network library
 
 # example (echo server)
 ```c
+#include "tsnet.h"
+
 static void accept_cb(socket_t client_fd, uint8_t *data, ssize_t data_len)
 {
   struct tsnet_client client;
