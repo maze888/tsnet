@@ -8,18 +8,22 @@
 #include <stdint.h>
 #include <errno.h>
 #include <signal.h>
+#include <assert.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
 #define CKNUL(p) p ? "valid" : "null"
 #define safe_free(p) if ( p ) { free(p); p = NULL; }
 #define safe_close(fd) if ( fd >= 0 ) { close(fd); fd = -1; }
+#define PANIC(expr) assert(expr)
 
 #define TSNET_DEFAULT_BACKLOG 64
 #define TSNET_DEFAULT_MAX_CLIENT 1024
-#define TSNET_MAX_READ_BYTES (BUFSIZ * 16)
+#define TSNET_MAX_RECV_BYTES (BUFSIZ * 16)
 
 #define TSNET_SET_ERROR(...) tsnet_set_last_error(__FILE__, __LINE__, __func__, __VA_ARGS__);
 
