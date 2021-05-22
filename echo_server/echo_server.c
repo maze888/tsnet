@@ -9,7 +9,7 @@ void accept_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len
 		return;
 	}
 
-	printf("connected with %s:%d\n", client.ip, client.port);
+	printf("connected with (%d:%s:%d)\n", client_fd, client.ip, client.port);
 }
 
 void recv_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len)
@@ -23,12 +23,8 @@ void close_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len)
 {
 	struct tsnet_client client;
 
-	if ( tsnet_get_client_info(client_fd, &client) < 0 ) {
-		fprintf(stderr, "%s\n", tsnet_get_last_error());
-		return;
-	}
-
-	printf("disconnected with %s:%d\n", client.ip, client.port);
+	if ( tsnet_get_client_info(client_fd, &client) < 0 ) printf("disconnected with (%d)\n", client_fd);
+	else printf("disconnected with (%d:%s:%d)\n", client_fd, client.ip, client.port);
 }
 
 int main(int argc, char **argv)

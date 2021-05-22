@@ -90,17 +90,21 @@ static int ht_insert_inter(HashTable *ht, void *key, size_t key_len, void *value
 	if ( bucket ) { // insert to bucket link
 		HashTableBucket *bucket_next;
 		
-		if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) {
-			TSNET_SET_ERROR("compare_key() is failed: (errmsg: duplication key)");
-			goto out;
+		if ( !ht->multi_key ) {
+			if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) {
+				TSNET_SET_ERROR("compare_key() is failed: (errmsg: duplication key)");
+				goto out;
+			}
 		}
 		
 		// move bucket last link
 		size_t bucket_link_count = 0;
 		for ( ; bucket->next; bucket = bucket->next ) {
-			if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) {
-				TSNET_SET_ERROR("compare_key() is failed: (errmsg: duplication key)");
-				goto out;
+			if ( !ht->multi_key ) {
+				if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) {
+					TSNET_SET_ERROR("compare_key() is failed: (errmsg: duplication key)");
+					goto out;
+				}
 			}
 			bucket_link_count++;
 		}
@@ -257,7 +261,27 @@ static HashTableBucket * ht_find(HashTable *ht, const void *key, size_t key_len)
 	return NULL;
 }
 
-HashTable * ht_create(size_t max_buckets_size, size_t max_bucket_link)
+static int ht_count(HashTable *ht, const void *key, size_t key_len)
+{
+	int count;
+	HashTableBucket *bucket;
+	uint32_t index;
+
+	bucket = get_ht_bucket(ht, key, key_len, &index);
+
+	for ( count = 0; bucket; bucket = bucket->next ) {
+		if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) count++;
+	}
+
+	return count;
+}
+
+static int ht_empty(HashTable *ht, const void *key, size_t key_len)
+{
+	return ht_count(ht, key, key_len) > 0 ? 0 /* not empty */ : 1 /* empty */;
+}
+
+HashTable * ht_create(size_t max_buckets_size, size_t max_bucket_link, char multi_key)
 {
 	HashTable *ht = NULL;
 
@@ -275,11 +299,15 @@ HashTable * ht_create(size_t max_buckets_size, size_t max_bucket_link)
 
 	if ( max_bucket_link == 0 ) ht->max_bucket_link = HASHTABLE_DEFAULT_BUCKET_LINK;
 	else ht->max_bucket_link = max_bucket_link;
+
+	ht->multi_key = multi_key;
 	
 	ht->insert = ht_insert;
 	ht->erase = ht_erase;
 	ht->clear = ht_bucket_clear;
 	ht->find = ht_find;
+	ht->count = ht_count;
+	ht->empty = ht_empty;
 
 	return ht;
 

@@ -45,10 +45,14 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 		}
 	}
 	else if ( nsend == 0 ) {
+		// TODO: if not loop out. must add error handling.
 		if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
 	}
 	else {
-		if ( errno != EWOULDBLOCK /* EAGAIN */ ) goto out;
+		if ( errno != EWOULDBLOCK /* EAGAIN */ ) {
+			// TODO: if not loop out. must add error handling.
+			goto out;
+		}
 	}
 
 	if ( send_done ) {
@@ -60,10 +64,12 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 		}
 
 		if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
-
-		if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_MOD, client_fd, EPOLLIN) < 0 ) {
-			TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_MOD, EPOLLIN) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
-			goto out;
+		
+		if ( tsnet->send_request_client->empty(tsnet->send_request_client, &client_fd, sizeof(client_fd)) ) {
+			if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_MOD, client_fd, EPOLLIN) < 0 ) {
+				TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_MOD, EPOLLIN) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
+				goto out;
+			}
 		}
 
 		if ( tsnet->cb_vec[TSNET_EVENT_SEND_COMPLETE] ) tsnet->cb_vec[TSNET_EVENT_SEND_COMPLETE](tsnet, client_fd, NULL, 0);
@@ -72,23 +78,6 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 	return 0;
 
 out:
-	// loop out
-	/*if ( close_client(tsnet, client_fd) < 0 ) goto out;
-
-	if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
-
-	if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_MOD, client_fd, EPOLLIN) < 0 ) {
-		TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_MOD, EPOLLIN) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
-		goto out;
-	}
-
-	if ( srq->send_type == TSNET_SEND_MEMORY ) { 
-		safe_free(srq->send_data); 
-	}
-	else if ( srq->send_type == TSNET_SEND_FILE ) { 
-		safe_close(srq->sendfile_fd); 
-	}*/
-
 	return -1;
 }
 
@@ -132,7 +121,7 @@ TSNET * tsnet_create(int type, int backlog, int max_client)
 	if ( max_client <= 0 ) tsnet->max_client = TSNET_DEFAULT_MAX_CLIENT;
 	else tsnet->max_client = max_client;
 
-	if ( !(tsnet->send_request_client = ht_create(0, 0)) ) goto out;
+	if ( !(tsnet->send_request_client = ht_create(0, 0, 1)) ) goto out;
 
 	signal(SIGPIPE, SIG_IGN);
 
@@ -273,8 +262,7 @@ int tsnet_loop(TSNET *tsnet)
 			socket_t event_fd = events[i].data.fd;
 			unsigned int event = events[i].events;
 
-			// accept event
-			if ( event_fd == tsnet->fd ) {
+			if ( event_fd == tsnet->fd /* server fd */) { // accept event
 				struct sockaddr_in caddr; 
 				socket_t client_fd;
 				socklen_t caddr_len = sizeof(caddr);
@@ -288,33 +276,35 @@ int tsnet_loop(TSNET *tsnet)
 
 				if ( tsnet->cb_vec[TSNET_EVENT_ACCEPT] ) tsnet->cb_vec[TSNET_EVENT_ACCEPT](tsnet, client_fd, NULL, 0);
 			}
-			// receive event
-			else if ( event & EPOLLIN ) {
-				memset(recv_buffer, 0x00, TSNET_MAX_RECV_BYTES);
+			else {
+				// recv event
+				if ( event & EPOLLIN ) {
+					memset(recv_buffer, 0x00, TSNET_MAX_RECV_BYTES);
 
-				ssize_t nrecv = recv(event_fd, recv_buffer, TSNET_MAX_RECV_BYTES, 0);
-				if ( nrecv <= 0 ) {
+					ssize_t nrecv = recv(event_fd, recv_buffer, TSNET_MAX_RECV_BYTES, 0);
+					if ( nrecv <= 0 ) {
+						if ( close_client(tsnet, event_fd) < 0 ) goto out;
+					}
+					else {
+						if ( tsnet->cb_vec[TSNET_EVENT_RECV] ) tsnet->cb_vec[TSNET_EVENT_RECV](tsnet, event_fd, recv_buffer, nrecv);
+					}
+				}
+				// hang-up or error event
+				else if ( event & EPOLLHUP /* recv return zero(same case) */ || event & EPOLLERR ) {
 					if ( close_client(tsnet, event_fd) < 0 ) goto out;
 				}
-				else {
-					if ( tsnet->cb_vec[TSNET_EVENT_RECV] ) tsnet->cb_vec[TSNET_EVENT_RECV](tsnet, event_fd, recv_buffer, nrecv);
-				}
-			}
-			// hang-up or error event
-			else if ( event & EPOLLHUP /* recv return zero(same case) */ || event & EPOLLERR ) {
-				if ( close_client(tsnet, event_fd) < 0 ) goto out;
-			}
-			// send event
-			else if ( event & EPOLLOUT ) {
-				HashTableBucket *bucket;
-				
-				if ( !(bucket = tsnet->send_request_client->find(tsnet->send_request_client, &event_fd, sizeof(event_fd))) ) {
-					TSNET_SET_ERROR("PANIC: EPOLLOUT event but can't find file descriptor");
-					goto out;
-				}
+				// send event
+				else if ( event & EPOLLOUT ) {
+					HashTableBucket *bucket;
 
-				if ( send_data_to_client(tsnet, bucket, event_fd) < 0 ) goto out;
-				//goto out; // memory leak test
+					if ( !(bucket = tsnet->send_request_client->find(tsnet->send_request_client, &event_fd, sizeof(event_fd))) ) {
+						TSNET_SET_ERROR("PANIC: EPOLLOUT event but can't find file descriptor");
+						goto out;
+					}
+
+					if ( send_data_to_client(tsnet, bucket, event_fd) < 0 ) goto out;
+					//goto out; // memory leak test
+				}
 			}
 		}
 	}
@@ -401,6 +391,8 @@ int tsnet_get_client_info(socket_t client_fd, struct tsnet_client *client)
 {
 	struct sockaddr_in caddr;
 	socklen_t caddr_len = sizeof(caddr);
+
+	// TODO: find in tsnet struct (don't call getpeername)
 
 	if ( getpeername(client_fd, (struct sockaddr *)&caddr, &caddr_len) < 0 ) {
 		fprintf(stderr, "getpeername() is failed: (errmsg: %s, errno: %d)\n", strerror(errno), errno);

@@ -7,7 +7,7 @@ typedef struct hash_table_bucket HashTableBucket;
 
 typedef int (*hashtable_insert_func)(HashTable *ht, const void *key, size_t key_len, const void *value, size_t value_len);
 typedef HashTableBucket * (*hashtable_find_func)(HashTable *ht, const void *key, size_t key_len);
-typedef int (*hashtable_erase_func)(HashTable *ht, const void *key, size_t key_len);
+typedef int (*hashtable_key_func)(HashTable *ht, const void *key, size_t key_len);
 typedef int (*hashtable_func)(HashTable *ht);
 
 typedef struct hash_table_bucket {
@@ -25,15 +25,18 @@ typedef struct hash_table {
 	size_t bucket_count; // used bucket count
 
 	char rearrange_fail;
+	char multi_key;
 
 	/* public */
 	hashtable_insert_func insert;
-	hashtable_erase_func erase;
+	hashtable_key_func erase;
 	hashtable_func clear;
 	hashtable_find_func find;
+	hashtable_key_func count;
+	hashtable_key_func empty;
 } HashTable;
 
-HashTable * ht_create(size_t max_size /* It is changed to an approximate value. (2^n) */, size_t max_bucket_link);
+HashTable * ht_create(size_t max_size /* It is changed to an approximate value. (2^n) */, size_t max_bucket_link, char multi_key);
 void ht_delete(HashTable *ht);
 
 void ht_dump(HashTable *ht, char detail);
