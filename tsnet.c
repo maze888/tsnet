@@ -8,8 +8,10 @@ static int close_client(TSNET *tsnet, int client_fd)
 		TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_DEL) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
 		goto out;
 	}
-					
+
 	if ( tsnet->cb_vec[TSNET_EVENT_CLOSE] ) tsnet->cb_vec[TSNET_EVENT_CLOSE](tsnet, client_fd, NULL, 0);
+	
+	if ( tsnet->connected_client->erase(tsnet->connected_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
 	
 	safe_close(client_fd);
 						
@@ -97,6 +99,29 @@ out:
 	return -1;
 }
 
+static int get_client_info(socket_t client_fd, struct tsnet_client *client)
+{
+	struct sockaddr_in caddr;
+	socklen_t caddr_len = sizeof(caddr);
+
+	if ( getpeername(client_fd, (struct sockaddr *)&caddr, &caddr_len) < 0 ) {
+		TSNET_SET_ERROR("getpeername() is failed: (errmsg: %s, errno: %d)\n", strerror(errno), errno);
+		goto out;
+	}
+
+	if ( !inet_ntop(AF_INET, &caddr.sin_addr, client->ip, sizeof(client->ip)) ) {
+		TSNET_SET_ERROR("inet_ntop() is failed: (errmsg: %s, errno: %d)\n", strerror(errno), errno);
+		goto out;
+	}
+
+	client->fd = client_fd;
+	client->port = ntohs(caddr.sin_port);
+
+	return 0;
+
+out:
+	return -1;
+}
 
 TSNET * tsnet_create(int type, int backlog, int max_client)
 {
@@ -121,6 +146,7 @@ TSNET * tsnet_create(int type, int backlog, int max_client)
 	if ( max_client <= 0 ) tsnet->max_client = TSNET_DEFAULT_MAX_CLIENT;
 	else tsnet->max_client = max_client;
 
+	if ( !(tsnet->connected_client = ht_create(0, 0, 0)) ) goto out;
 	if ( !(tsnet->send_request_client = ht_create(0, 0, 1)) ) goto out;
 
 	signal(SIGPIPE, SIG_IGN);
@@ -138,6 +164,7 @@ void tsnet_delete(TSNET *tsnet)
 	if ( tsnet ) {
 		safe_close(tsnet->fd);
 		safe_close(tsnet->epfd);
+		ht_delete(tsnet->connected_client);
 		ht_delete(tsnet->send_request_client);
 		free(tsnet);
 	}
@@ -269,6 +296,11 @@ int tsnet_loop(TSNET *tsnet)
 
 				if ( (client_fd = accept4(tsnet->fd, (struct sockaddr *)&caddr, &caddr_len, SOCK_NONBLOCK)) < 0 ) continue;
 
+				struct tsnet_client client;
+				if ( get_client_info(client_fd, &client) < 0 ) goto out;
+
+				if ( tsnet->connected_client->insert(tsnet->connected_client, &client_fd, sizeof(client_fd), &client, sizeof(client)) ) goto out;
+
 				if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_ADD, client_fd, EPOLLIN) < 0 ) {
 					TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_ADD, EPOLLIN) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
 					goto out;
@@ -387,25 +419,16 @@ out:
 	return -1;
 }
 
-int tsnet_get_client_info(socket_t client_fd, struct tsnet_client *client)
+int tsnet_get_client_info(TSNET *tsnet, socket_t client_fd, struct tsnet_client *client)
 {
-	struct sockaddr_in caddr;
-	socklen_t caddr_len = sizeof(caddr);
+	HashTableBucket *bucket;
 
-	// TODO: find in tsnet struct (don't call getpeername)
-
-	if ( getpeername(client_fd, (struct sockaddr *)&caddr, &caddr_len) < 0 ) {
-		fprintf(stderr, "getpeername() is failed: (errmsg: %s, errno: %d)\n", strerror(errno), errno);
+	if ( !(bucket = tsnet->connected_client->find(tsnet->connected_client, &client_fd, sizeof(client_fd))) ) {
+		TSNET_SET_ERROR("can not found (connected_client: fd = %d)", client_fd);
 		goto out;
 	}
 
-	if ( !inet_ntop(AF_INET, &caddr.sin_addr, client->ip, sizeof(client->ip)) ) {
-		fprintf(stderr, "inet_ntop() is failed: (errmsg: %s, errno: %d)\n", strerror(errno), errno);
-		goto out;
-	}
-
-	client->fd = client_fd;
-	client->port = ntohs(caddr.sin_port);
+	memcpy(client, bucket->value, bucket->value_len);
 
 	return 0;
 

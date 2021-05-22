@@ -63,6 +63,7 @@ typedef struct tsnet {
 
 	tsnet_cb_t cb_vec[TSNET_EVENT_MAX];
 	HashTable *send_request_client; // client that sent the send request 
+	HashTable *connected_client;
 
 	char is_bind;
 } TSNET;
@@ -76,6 +77,6 @@ int tsnet_loop(TSNET *tsnet);
 
 int tsnet_send(TSNET *tsnet, socket_t client_fd, const void *data, size_t data_len);
 int tsnet_sendfile(TSNET *tsnet, socket_t client_fd, const char *file_path);
-int tsnet_get_client_info(socket_t client_fd, struct tsnet_client *client);
+int tsnet_get_client_info(TSNET *tsnet, socket_t client_fd, struct tsnet_client *client);
 
 const char *tsnet_get_last_error();
