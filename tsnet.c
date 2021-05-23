@@ -30,10 +30,10 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 	srq = bucket->value;
 	
 	if ( srq->send_type == TSNET_SEND_MEMORY ) {
-		nsend = send(srq->fd, srq->send_data + srq->sended_len, srq->send_len, 0);
+		nsend = send(srq->fd, srq->send_data + srq->sended_len, srq->send_len - srq->sended_len, 0);
 	}
 	else if ( srq->send_type == TSNET_SEND_FILE ) {
-		nsend = sendfile(client_fd, srq->sendfile_fd, NULL, srq->send_len);
+		nsend = sendfile(client_fd, srq->sendfile_fd /* offset auto move */, NULL, srq->send_len - srq->sended_len);
 	}
 	else { // it never happens, but i put in the code just in case 
 		TSNET_SET_ERROR("invalid send type (type: %d)", srq->send_type);
