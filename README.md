@@ -6,6 +6,8 @@ tsnet is simple server network library
 * event driven
 * only support tcp(if necessary UDP support add)
 
+And you need **gcc, make, cmake, golang(for client tester)** installed to compile.
+
 # example (echo server)
 ```c
 #include "tsnet.h"
@@ -61,18 +63,9 @@ int main(int argc, char **argv)
     goto out;
   }
 
-  if ( tsnet_addListener(tsnet, TSNET_EVENT_ACCEPT, accept_cb) < 0 ) {
-    fprintf(stderr, "%s\n", tsnet_get_last_error());
-    goto out;
-  }
-  if ( tsnet_addListener(tsnet, TSNET_EVENT_RECV, recv_cb) < 0 ) {
-    fprintf(stderr, "%s\n", tsnet_get_last_error());
-    goto out;
-  }
-  if ( tsnet_addListener(tsnet, TSNET_EVENT_CLOSE, close_cb) < 0 ) {
-    fprintf(stderr, "%s\n", tsnet_get_last_error());
-    goto out;
-  }
+  (void)tsnet_addListener(tsnet, TSNET_EVENT_ACCEPT, accept_cb)   
+  (void)tsnet_addListener(tsnet, TSNET_EVENT_RECV, recv_cb)   
+  (void)tsnet_addListener(tsnet, TSNET_EVENT_CLOSE, close_cb)   
 
   if ( tsnet_loop(tsnet) < 0 ) {
     fprintf(stderr, "%s\n", tsnet_get_last_error());
