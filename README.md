@@ -1,36 +1,54 @@
 # tsnet
 tsnet is simple server network library    
 
-* single thread loop
+* single thread server
+* complete nonblocking
 * event driven
-
+* only support tcp(if necessary UDP support add)
 
 # example (echo server)
 ```c
 #include "tsnet.h"
 
-static void accept_cb(socket_t client_fd, uint8_t *data, ssize_t data_len)
+void accept_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len)
 {
   struct tsnet_client client;
-  (void)tsnet_get_client_info(client_fd, &client);    
-  printf("connected with %s:%d\n", client.ip, client.port);
+
+  if ( tsnet_get_client_info(tsnet, client_fd, &client) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+    return;
+  }
+
+  printf("connected with (%d:%s:%d)\n", client_fd, client.ip, client.port);
 }
 
-static void read_cb(socket_t client_fd, uint8_t *data, ssize_t data_len)
+void recv_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len)
 {
-  (void)send(client_fd, data, data_len, 0);
+  if ( tsnet_send(tsnet, client_fd, data, data_len) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+  }
 }
 
-static void close_cb(socket_t client_fd, uint8_t *data, ssize_t data_len)
+void close_cb(TSNET *tsnet, socket_t client_fd, uint8_t *data, ssize_t data_len)
 {
   struct tsnet_client client;
-  (void)tsnet_get_client_info(client_fd, &client);
-  printf("disconnected with %s:%d\n", client.ip, client.port);
+
+  if ( tsnet_get_client_info(tsnet, client_fd, &client) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+    return;
+  }
+
+  printf("disconnected with (%d:%s:%d)\n", client_fd, client.ip, client.port);
 }
 
 int main(int argc, char **argv)
 {
   TSNET *tsnet = NULL;
+
+  if ( argc != 2 ) {
+    fprintf(stderr, "%s (port)\n", argv[0]);
+    return 1;
+  }
 
   tsnet = tsnet_create(TSNET_EPOLL, 0, 0);
   if ( !tsnet ) {
@@ -38,15 +56,24 @@ int main(int argc, char **argv)
     goto out;
   }
 
-  if ( tsnet_setup(tsnet, "0.0.0.0", 8080) < 0 ) {
+  if ( tsnet_bind(tsnet, "0.0.0.0", atoi(argv[1])) < 0 ) {
     fprintf(stderr, "%s\n", tsnet_get_last_error());
     goto out;
   }
 
-  (void)tsnet_addListener(tsnet, TSNET_EVENT_ACCEPT, accept_cb);
-  (void)tsnet_addListener(tsnet, TSNET_EVENT_READ, read_cb);
-  (void)tsnet_addListener(tsnet, TSNET_EVENT_CLOSE, close_cb);
-    
+  if ( tsnet_addListener(tsnet, TSNET_EVENT_ACCEPT, accept_cb) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+    goto out;
+  }
+  if ( tsnet_addListener(tsnet, TSNET_EVENT_RECV, recv_cb) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+    goto out;
+  }
+  if ( tsnet_addListener(tsnet, TSNET_EVENT_CLOSE, close_cb) < 0 ) {
+    fprintf(stderr, "%s\n", tsnet_get_last_error());
+    goto out;
+  }
+
   if ( tsnet_loop(tsnet) < 0 ) {
     fprintf(stderr, "%s\n", tsnet_get_last_error());
     goto out;
