@@ -65,10 +65,13 @@ typedef struct tsnet {
 	HashTable *send_request_client; // client that sent the send request 
 	HashTable *connected_client;
 
+	void *user_data;
+
 	char is_bind;
 } TSNET;
 
 TSNET * tsnet_create(int type, int backlog, int max_client);
+void tsnet_set_user_data(TSNET *tsnet, void *user_data);
 void tsnet_delete(TSNET *tsnet);
 
 int tsnet_bind(TSNET *tsnet, const char *ip, uint16_t port);

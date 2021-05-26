@@ -180,40 +180,36 @@ out:
 	return -1;
 }
 
-static int ht_erase(HashTable *ht, const void *key, size_t key_len)
+static int ht_erase(HashTable *ht, const void *key, size_t key_len, int8_t multi_key_erase)
 {
-	int rv = HT_BUCKET_NOT_FOUND; // not found
-	HashTableBucket *bucket, *bucket_prev;
+	int8_t erased = 0;
 	uint32_t index;
+	HashTableBucket *bucket, *bucket_prev = NULL, *bucket_next;
 
 	bucket = get_ht_bucket(ht, key, key_len, &index);
-	
-	for ( int i = 0; bucket; bucket = bucket->next, i++ ) { // walk to bucket link
-		if ( (rv = compare_key(bucket->key, bucket->key_len, key, key_len)) == 0 ) {
-			size_t bucket_link_count = 0;
-			HashTableBucket *bucket_tmp = bucket->next;
-			for ( ; bucket_tmp; bucket_tmp = bucket_tmp->next ) bucket_link_count++;
+
+	for ( ; bucket; bucket = bucket_next ) { // walk to bucket link
+		bucket_next = bucket->next;
+
+		if ( compare_key(bucket->key, bucket->key_len, key, key_len) == 0 ) {
+			if ( ht->buckets[index]->next == NULL ) ht->bucket_count--;
+
+			if ( ht->buckets[index] == bucket ) ht->buckets[index] = bucket->next;
+			else bucket_prev->next = bucket->next;
 
 			safe_free(bucket->key);
+			if ( ht->erase_free ) ht->erase_free(bucket->value);
 			safe_free(bucket->value);
-			switch (i) {
-				case 0:
-					ht->buckets[index] = bucket->next;
-					break;
-				default:
-					bucket_prev->next = bucket->next;
-					break;
-			}
 			safe_free(bucket);
-	
-			if ( i == 0 && bucket_link_count == 0 ) ht->bucket_count--;
-			break;
+
+			erased = 1;
+			if ( !multi_key_erase ) break;
 		}
 
 		bucket_prev = bucket;
 	}
 
-	return rv;
+	return erased ? 0 /* erased */ : -1; /* cant found */
 }
 
 static void ht_bucket_clear_inter(HashTableBucket **buckets, size_t buckets_size)
@@ -315,6 +311,11 @@ out:
 	ht_delete(ht);
 
 	return NULL;
+}
+
+void ht_set_erase_free(HashTable *ht, hashtable_erase_free erase_free)
+{
+	if ( ht && erase_free ) ht->erase_free = erase_free;
 }
 
 void ht_delete(HashTable *ht)

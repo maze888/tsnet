@@ -2,6 +2,21 @@
 #include "tsnet_common_inter.h"
 #include "tsnet_epoll.h"
 
+static void send_request_erase_free(void *data)
+{
+	struct tsnet_send_request *srq;
+
+	if ( data ) {
+		srq = data;
+		if ( srq->send_type == TSNET_SEND_MEMORY ) {
+			safe_free(srq->send_data);
+		}
+		else if ( srq->send_type == TSNET_SEND_FILE ) {
+			safe_close(srq->sendfile_fd);
+		}
+	}
+}
+
 static int close_client(TSNET *tsnet, int client_fd)
 {
 	if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_DEL, client_fd, 0) < 0 ) {
@@ -11,7 +26,8 @@ static int close_client(TSNET *tsnet, int client_fd)
 
 	if ( tsnet->cb_vec[TSNET_EVENT_CLOSE] ) tsnet->cb_vec[TSNET_EVENT_CLOSE](tsnet, client_fd, NULL, 0);
 	
-	if ( tsnet->connected_client->erase(tsnet->connected_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
+	(void)tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd), 1);
+	if ( tsnet->connected_client->erase(tsnet->connected_client, &client_fd, sizeof(client_fd), 0) < 0 ) goto out;
 	
 	safe_close(client_fd);
 						
@@ -30,42 +46,40 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 	srq = bucket->value;
 	
 	if ( srq->send_type == TSNET_SEND_MEMORY ) {
-		nsend = send(srq->fd, srq->send_data + srq->sended_len, srq->send_len - srq->sended_len, 0);
+		do {
+			nsend = send(srq->fd, srq->send_data + srq->sended_len, srq->send_len - srq->sended_len, 0);
+			//printf("send nsend:     %ld\n", nsend);
+			if ( nsend > 0 ) srq->sended_len += nsend;
+		} while ( nsend > 0 );
 	}
 	else if ( srq->send_type == TSNET_SEND_FILE ) {
-		nsend = sendfile(client_fd, srq->sendfile_fd /* offset auto move */, NULL, srq->send_len - srq->sended_len);
+		do {
+			nsend = sendfile(client_fd, srq->sendfile_fd /* offset auto move */, NULL, srq->send_len - srq->sended_len);
+			//printf("sendfile nsend: %ld\n", nsend);
+			if ( nsend > 0 ) srq->sended_len += nsend;
+		} while ( nsend > 0 );
 	}
 	else { // it never happens, but i put in the code just in case 
 		TSNET_SET_ERROR("invalid send type (type: %d)", srq->send_type);
 		goto out;
 	}
-
-	if ( nsend > 0 ) {
-		srq->sended_len += nsend;
-		if ( srq->send_len == srq->sended_len ) { // sending is completed
-			send_done = 1;
-		}
-	}
-	else if ( nsend == 0 ) {
-		// TODO: if not loop out. must add error handling.
-		if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
-	}
-	else {
-		if ( errno != EWOULDBLOCK /* EAGAIN */ ) {
-			// TODO: if not loop out. must add error handling.
+	
+	if ( nsend < 0 ) {
+		if ( errno != EWOULDBLOCK ) {
+			if ( srq->send_type == TSNET_SEND_MEMORY ) {
+				TSNET_SET_ERROR("send() is failed: (nsend: %ld, errmsg: %s, errno: %d, srq->fd: %d, srq->send_len: %lu, srq->sended_len: %lu)", nsend, strerror(errno), errno, srq->fd, srq->send_len, srq->sended_len);
+			}
+			else {
+				TSNET_SET_ERROR("sendfile() is failed: (nsend: %ld, errmsg: %s, errno: %d, srq->fd: %d, srq->send_len: %lu, srq->sended_len: %lu)", nsend, strerror(errno), errno, srq->fd, srq->send_len, srq->sended_len);
+			}
 			goto out;
 		}
 	}
+	
+	if ( srq->send_len == srq->sended_len ) send_done = 1; // sending is completed
 
 	if ( send_done ) {
-		if ( srq->send_type == TSNET_SEND_MEMORY ) { 
-			safe_free(srq->send_data); 
-		}
-		else if ( srq->send_type == TSNET_SEND_FILE ) { 
-			safe_close(srq->sendfile_fd); 
-		}
-
-		if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd)) < 0 ) goto out;
+		if ( tsnet->send_request_client->erase(tsnet->send_request_client, &client_fd, sizeof(client_fd), 0) < 0 ) goto out;
 		
 		if ( tsnet->send_request_client->empty(tsnet->send_request_client, &client_fd, sizeof(client_fd)) ) {
 			if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_MOD, client_fd, EPOLLIN) < 0 ) {
@@ -80,6 +94,15 @@ static int send_data_to_client(TSNET *tsnet, HashTableBucket *bucket, int client
 	return 0;
 
 out:
+	if ( srq->send_type == TSNET_SEND_MEMORY ) { 
+		safe_free(srq->send_data); 
+	}
+	else if ( srq->send_type == TSNET_SEND_FILE ) { 
+		safe_close(srq->sendfile_fd); 
+	}
+
+	(void)close_client(tsnet, client_fd);
+
 	return -1;
 }
 
@@ -89,7 +112,7 @@ static int insert_send_event(TSNET *tsnet, struct tsnet_send_request *srq)
 	
 	if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_MOD, srq->fd, EPOLLIN | EPOLLOUT) < 0 ) {
 		TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_MOD, EPOLLIN | EPOLLOUT) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
-		(void)tsnet->send_request_client->erase(tsnet->send_request_client, &srq->fd, sizeof(srq->fd));
+		(void)tsnet->send_request_client->erase(tsnet->send_request_client, &srq->fd, sizeof(srq->fd), 1);
 		goto out;
 	}
 	
@@ -149,6 +172,8 @@ TSNET * tsnet_create(int type, int backlog, int max_client)
 	if ( !(tsnet->connected_client = ht_create(0, 0, 0)) ) goto out;
 	if ( !(tsnet->send_request_client = ht_create(0, 0, 1)) ) goto out;
 
+	ht_set_erase_free(tsnet->send_request_client, send_request_erase_free);
+
 	signal(SIGPIPE, SIG_IGN);
 
 	return tsnet;
@@ -157,6 +182,11 @@ out:
 	tsnet_delete(tsnet);
 
 	return NULL;
+}
+
+void tsnet_set_user_data(TSNET *tsnet, void *user_data)
+{
+	if ( tsnet && user_data ) tsnet->user_data = user_data;
 }
 
 void tsnet_delete(TSNET *tsnet)
@@ -299,7 +329,7 @@ int tsnet_loop(TSNET *tsnet)
 				struct tsnet_client client;
 				if ( get_client_info(client_fd, &client) < 0 ) goto out;
 
-				if ( tsnet->connected_client->insert(tsnet->connected_client, &client_fd, sizeof(client_fd), &client, sizeof(client)) ) goto out;
+				if ( tsnet->connected_client->insert(tsnet->connected_client, &client_fd, sizeof(client_fd), &client, sizeof(client)) < 0 ) goto out;
 
 				if ( epoll_event_control(tsnet->epfd, EPOLL_CTL_ADD, client_fd, EPOLLIN) < 0 ) {
 					TSNET_SET_ERROR("epoll_ctl(EPOLL_CTL_ADD, EPOLLIN) is failed: (errmsg: %s, errno: %d)", strerror(errno), errno);
